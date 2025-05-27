@@ -4,11 +4,33 @@
 #include "shader2d_frag_spv.h"
 #include <string.h>
 
+// static const Vertex vertices[] = {
+//     {0.0f, -0.5f, 1.0f, 0.0f, 0.0f}, // Top, red
+//     {0.5f, 0.5f, 0.0f, 1.0f, 0.0f},  // Bottom-right, green
+//     {-0.5f, 0.5f, 0.0f, 0.0f, 1.0f}  // Bottom-left, blue
+// };
+
 static const Vertex vertices[] = {
+    // Triangle (unchanged)
     {0.0f, -0.5f, 1.0f, 0.0f, 0.0f}, // Top, red
     {0.5f, 0.5f, 0.0f, 1.0f, 0.0f},  // Bottom-right, green
-    {-0.5f, 0.5f, 0.0f, 0.0f, 1.0f}  // Bottom-left, blue
+    {-0.5f, 0.5f, 0.0f, 0.0f, 1.0f}, // Bottom-left, blue
+
+    // Square (two triangles, 6 vertices)
+    // Bottom-left, cyan
+    {-0.25f, -0.25f, 0.0f, 1.0f, 1.0f},
+    // Bottom-right, cyan
+    {0.25f, -0.25f, 0.0f, 1.0f, 1.0f},
+    // Top-left, cyan
+    {-0.25f, 0.25f, 0.0f, 1.0f, 1.0f},
+    // Top-left, cyan
+    {-0.25f, 0.25f, 0.0f, 1.0f, 1.0f},
+    // Bottom-right, cyan
+    {0.25f, -0.25f, 0.0f, 1.0f, 1.0f},
+    // Top-right, cyan
+    {0.25f, 0.25f, 0.0f, 1.0f, 1.0f}
 };
+
 
 static uint32_t findMemoryType(VkPhysicalDevice physDev, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
@@ -445,7 +467,8 @@ bool vulkan_render(VulkanContext *context) {
     vkCmdBindPipeline(context->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, context->graphicsPipeline);
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(context->commandBuffer, 0, 1, &context->vertexBuffer, offsets);
-    vkCmdDraw(context->commandBuffer, 3, 1, 0, 0);
+    // Draw triangle (3 vertices) and square (6 vertices)
+    vkCmdDraw(context->commandBuffer, 9, 1, 0, 0);
     vkCmdEndRenderPass(context->commandBuffer);
     vkEndCommandBuffer(context->commandBuffer);
 
