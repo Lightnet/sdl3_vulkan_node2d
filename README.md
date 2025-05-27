@@ -95,6 +95,11 @@ sdl3_vulkan_node2d/
 bash
 ```bash
 pacman -Syu
+```
+update the packages.
+
+bash
+```bash
 pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-g++ mingw-w64-x86_64-cmake mingw-w64-x86_64-make mingw-w64-x86_64-pkgconf
 ```
 - Note might need to install vulkan-d library.
