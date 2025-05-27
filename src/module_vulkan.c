@@ -451,7 +451,6 @@ bool vulkan_init(SDL_Window *window, VulkanContext *context) {
 }
 
 
-
 bool vulkan_render(VulkanContext *context) {
     static uint32_t currentFrame = 0; // Tracks the current frame index for fence/semaphore pool
 
@@ -585,8 +584,6 @@ bool vulkan_render(VulkanContext *context) {
 }
 
 
-
-
 void vulkan_cleanup(VulkanContext *context) {
     vkDeviceWaitIdle(context->device);
 
@@ -628,7 +625,6 @@ void vulkan_cleanup(VulkanContext *context) {
     vkDestroySurfaceKHR(context->instance, context->surface, NULL);
     vkDestroyInstance(context->instance, NULL);
 }
-
 
 
 bool recreate_swapchain(VulkanContext *context, SDL_Window *window) {

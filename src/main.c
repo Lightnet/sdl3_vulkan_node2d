@@ -2,7 +2,7 @@
 #include "module_vulkan.h"
 
 int main(int argc, char *argv[]) {
-    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
 
     SDL_Window *window = SDL_CreateWindow("SDL Vulkan Node 2D", 600, 480, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
     if (!window) {
@@ -36,11 +36,10 @@ int main(int argc, char *argv[]) {
         }
 
         if (!vulkan_render(&context)) {
-            // Handle swapchain out of date
             if (!recreate_swapchain(&context, window)) {
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Failed to recreate swapchain, retrying");
+                continue;
             }
-            continue;
         }
     }
 
