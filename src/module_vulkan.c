@@ -1,0 +1,501 @@
+#include "module_vulkan.h"
+#include <stdlib.h>
+#include "shader2d_vert_spv.h"
+#include "shader2d_frag_spv.h"
+#include <string.h>
+
+static const Vertex vertices[] = {
+    {0.0f, -0.5f, 1.0f, 0.0f, 0.0f}, // Top, red
+    {0.5f, 0.5f, 0.0f, 1.0f, 0.0f},  // Bottom-right, green
+    {-0.5f, 0.5f, 0.0f, 0.0f, 1.0f}  // Bottom-left, blue
+};
+
+static uint32_t findMemoryType(VkPhysicalDevice physDev, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physDev, &memProperties);
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to find suitable memory type");
+    return UINT32_MAX;
+}
+
+static VkResult createBuffer(VkDevice dev, VkPhysicalDevice physDev, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer *buffer, VkDeviceMemory *bufferMemory) {
+    VkBufferCreateInfo bufferInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE
+    };
+    if (vkCreateBuffer(dev, &bufferInfo, NULL, buffer) != VK_SUCCESS) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(dev, *buffer, &memRequirements);
+    VkMemoryAllocateInfo allocInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memRequirements.size,
+        .memoryTypeIndex = findMemoryType(physDev, memRequirements.memoryTypeBits, properties)
+    };
+    if (vkAllocateMemory(dev, &allocInfo, NULL, bufferMemory) != VK_SUCCESS) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    vkBindBufferMemory(dev, *buffer, *bufferMemory, 0);
+    return VK_SUCCESS;
+}
+
+bool vulkan_init(SDL_Window *window, VulkanContext *context) {
+    // Initialize Vulkan instance
+    uint32_t extensionCount = 0;
+    const char *const *extensions = SDL_Vulkan_GetInstanceExtensions(&extensionCount);
+    if (!extensions) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to get Vulkan extensions: %s", SDL_GetError());
+        return false;
+    }
+
+    VkApplicationInfo appInfo = {
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .pApplicationName = "SDL Vulkan Node 2D",
+        .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+        .pEngineName = "No Engine",
+        .engineVersion = VK_MAKE_VERSION(1, 0, 0),
+        .apiVersion = VK_API_VERSION_1_3
+    };
+
+    VkInstanceCreateInfo createInfo = {
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pApplicationInfo = &appInfo,
+        .enabledExtensionCount = extensionCount,
+        .ppEnabledExtensionNames = extensions,
+        .enabledLayerCount = 0
+    };
+
+    if (vkCreateInstance(&createInfo, NULL, &context->instance) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create Vulkan instance");
+        return false;
+    }
+
+    // Create Vulkan surface
+    if (!SDL_Vulkan_CreateSurface(window, context->instance, NULL, &context->surface)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create Vulkan surface: %s", SDL_GetError());
+        vkDestroyInstance(context->instance, NULL);
+        return false;
+    }
+
+    // Select physical device
+    uint32_t deviceCount = 0;
+    vkEnumeratePhysicalDevices(context->instance, &deviceCount, NULL);
+    VkPhysicalDevice devices[10];
+    vkEnumeratePhysicalDevices(context->instance, &deviceCount, devices);
+    context->physicalDevice = devices[0]; // Simplified: pick first device
+
+    // Find queue families
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(context->physicalDevice, &queueFamilyCount, NULL);
+    VkQueueFamilyProperties queueFamilies[10];
+    vkGetPhysicalDeviceQueueFamilyProperties(context->physicalDevice, &queueFamilyCount, queueFamilies);
+    uint32_t graphicsFamily = UINT32_MAX, presentFamily = UINT32_MAX;
+    for (uint32_t i = 0; i < queueFamilyCount; i++) {
+        if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            graphicsFamily = i;
+        }
+        VkBool32 presentSupport = VK_FALSE;
+        vkGetPhysicalDeviceSurfaceSupportKHR(context->physicalDevice, i, context->surface, &presentSupport);
+        if (presentSupport) {
+            presentFamily = i;
+        }
+    }
+    if (graphicsFamily == UINT32_MAX || presentFamily == UINT32_MAX) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to find suitable queue families");
+        return false;
+    }
+
+    // Create logical device
+    float queuePriority = 1.0f;
+    VkDeviceQueueCreateInfo queueCreateInfos[2] = {
+        {
+            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            .queueFamilyIndex = graphicsFamily,
+            .queueCount = 1,
+            .pQueuePriorities = &queuePriority
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            .queueFamilyIndex = presentFamily,
+            .queueCount = 1,
+            .pQueuePriorities = &queuePriority
+        }
+    };
+    uint32_t queueCreateInfoCount = graphicsFamily == presentFamily ? 1 : 2;
+    VkPhysicalDeviceFeatures deviceFeatures = {0};
+    const char *deviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    VkDeviceCreateInfo deviceCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount = queueCreateInfoCount,
+        .pQueueCreateInfos = queueCreateInfos,
+        .enabledExtensionCount = 1,
+        .ppEnabledExtensionNames = deviceExtensions,
+        .pEnabledFeatures = &deviceFeatures
+    };
+    if (vkCreateDevice(context->physicalDevice, &deviceCreateInfo, NULL, &context->device) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create Vulkan device");
+        return false;
+    }
+
+    vkGetDeviceQueue(context->device, graphicsFamily, 0, &context->graphicsQueue);
+    vkGetDeviceQueue(context->device, presentFamily, 0, &context->presentQueue);
+
+    // Create swapchain
+    VkSurfaceCapabilitiesKHR surfaceCaps;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(context->physicalDevice, context->surface, &surfaceCaps);
+    uint32_t formatCount, presentModeCount;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(context->physicalDevice, context->surface, &formatCount, NULL);
+    VkSurfaceFormatKHR formats[10];
+    vkGetPhysicalDeviceSurfaceFormatsKHR(context->physicalDevice, context->surface, &formatCount, formats);
+    VkSurfaceFormatKHR surfaceFormat = formats[0]; // Simplified: pick first format
+    vkGetPhysicalDeviceSurfacePresentModesKHR(context->physicalDevice, context->surface, &presentModeCount, NULL);
+    VkPresentModeKHR presentModes[10];
+    vkGetPhysicalDeviceSurfacePresentModesKHR(context->physicalDevice, context->surface, &presentModeCount, presentModes);
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    VkSwapchainCreateInfoKHR swapchainInfo = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .surface = context->surface,
+        .minImageCount = surfaceCaps.minImageCount + 1,
+        .imageFormat = surfaceFormat.format,
+        .imageColorSpace = surfaceFormat.colorSpace,
+        .imageExtent = surfaceCaps.currentExtent,
+        .imageArrayLayers = 1,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageSharingMode = graphicsFamily == presentFamily ? VK_SHARING_MODE_EXCLUSIVE : VK_SHARING_MODE_CONCURRENT,
+        .queueFamilyIndexCount = graphicsFamily == presentFamily ? 0 : 2,
+        .pQueueFamilyIndices = (uint32_t[]){graphicsFamily, presentFamily},
+        .preTransform = surfaceCaps.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = presentMode,
+        .clipped = VK_TRUE,
+        .oldSwapchain = VK_NULL_HANDLE
+    };
+    if (vkCreateSwapchainKHR(context->device, &swapchainInfo, NULL, &context->swapchain) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create swapchain");
+        return false;
+    }
+    context->swapchainExtent = surfaceCaps.currentExtent;
+
+    // Get swapchain images
+    vkGetSwapchainImagesKHR(context->device, context->swapchain, &context->imageCount, NULL);
+    VkImage swapchainImages[10];
+    vkGetSwapchainImagesKHR(context->device, context->swapchain, &context->imageCount, swapchainImages);
+    context->imageViews = malloc(context->imageCount * sizeof(VkImageView));
+    for (uint32_t i = 0; i < context->imageCount; i++) {
+        VkImageViewCreateInfo viewInfo = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = swapchainImages[i],
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = surfaceFormat.format,
+            .components = {VK_COMPONENT_SWIZZLE_IDENTITY},
+            .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .subresourceRange.baseMipLevel = 0,
+            .subresourceRange.levelCount = 1,
+            .subresourceRange.baseArrayLayer = 0,
+            .subresourceRange.layerCount = 1
+        };
+        vkCreateImageView(context->device, &viewInfo, NULL, &context->imageViews[i]);
+    }
+
+    // Create render pass
+    VkAttachmentDescription colorAttachment = {
+        .format = surfaceFormat.format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    };
+    VkAttachmentReference colorAttachmentRef = {
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+    VkSubpassDescription subpass = {
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachmentRef
+    };
+    VkRenderPassCreateInfo renderPassInfo = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &colorAttachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass
+    };
+    if (vkCreateRenderPass(context->device, &renderPassInfo, NULL, &context->renderPass) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create render pass");
+        return false;
+    }
+
+    // Create shader modules
+    VkShaderModule vertShaderModule, fragShaderModule;
+    VkShaderModuleCreateInfo vertShaderInfo = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = sizeof(shader2d_vert_spv),
+        .pCode = shader2d_vert_spv
+    };
+    VkShaderModuleCreateInfo fragShaderInfo = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = sizeof(shader2d_frag_spv),
+        .pCode = shader2d_frag_spv
+    };
+    if (vkCreateShaderModule(context->device, &vertShaderInfo, NULL, &vertShaderModule) != VK_SUCCESS ||
+        vkCreateShaderModule(context->device, &fragShaderInfo, NULL, &fragShaderModule) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create shader modules");
+        return false;
+    }
+
+    // Create graphics pipeline
+    VkPipelineShaderStageCreateInfo shaderStages[] = {
+        {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vertShaderModule,
+            .pName = "main"
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = fragShaderModule,
+            .pName = "main"
+        }
+    };
+    VkVertexInputBindingDescription bindingDesc = {
+        .binding = 0,
+        .stride = sizeof(Vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+    };
+    VkVertexInputAttributeDescription attributeDescs[] = {
+        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, x) },
+        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, r) }
+    };
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDesc,
+        .vertexAttributeDescriptionCount = 2,
+        .pVertexAttributeDescriptions = attributeDescs
+    };
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+    VkViewport viewport = { 0.0f, 0.0f, (float)surfaceCaps.currentExtent.width, (float)surfaceCaps.currentExtent.height, 0.0f, 1.0f };
+    VkRect2D scissor = { {0, 0}, surfaceCaps.currentExtent };
+    VkPipelineViewportStateCreateInfo viewportState = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor
+    };
+    VkPipelineRasterizationStateCreateInfo rasterizer = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .lineWidth = 1.0f
+    };
+    VkPipelineMultisampleStateCreateInfo multisampling = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT
+    };
+    VkPipelineColorBlendAttachmentState colorBlendAttachment = {
+        .blendEnable = VK_FALSE,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo colorBlending = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable = VK_FALSE,
+        .attachmentCount = 1,
+        .pAttachments = &colorBlendAttachment
+    };
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 0,
+        .pSetLayouts = NULL
+    };
+    if (vkCreatePipelineLayout(context->device, &pipelineLayoutInfo, NULL, &context->pipelineLayout) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create pipeline layout");
+        vkDestroyShaderModule(context->device, fragShaderModule, NULL);
+        vkDestroyShaderModule(context->device, vertShaderModule, NULL);
+        return false;
+    }
+    VkGraphicsPipelineCreateInfo pipelineInfo = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = shaderStages,
+        .pVertexInputState = &vertexInputInfo,
+        .pInputAssemblyState = &inputAssembly,
+        .pViewportState = &viewportState,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pColorBlendState = &colorBlending,
+        .layout = context->pipelineLayout,
+        .renderPass = context->renderPass,
+        .subpass = 0
+    };
+    if (vkCreateGraphicsPipelines(context->device, VK_NULL_HANDLE, 1, &pipelineInfo, NULL, &context->graphicsPipeline) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create graphics pipeline");
+        vkDestroyPipelineLayout(context->device, context->pipelineLayout, NULL);
+        vkDestroyShaderModule(context->device, fragShaderModule, NULL);
+        vkDestroyShaderModule(context->device, vertShaderModule, NULL);
+        return false;
+    }
+    vkDestroyShaderModule(context->device, fragShaderModule, NULL);
+    vkDestroyShaderModule(context->device, vertShaderModule, NULL);
+
+    // Create framebuffers
+    context->framebuffers = malloc(context->imageCount * sizeof(VkFramebuffer));
+    for (uint32_t i = 0; i < context->imageCount; i++) {
+        VkFramebufferCreateInfo framebufferInfo = {
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = context->renderPass,
+            .attachmentCount = 1,
+            .pAttachments = &context->imageViews[i],
+            .width = context->swapchainExtent.width,
+            .height = context->swapchainExtent.height,
+            .layers = 1
+        };
+        vkCreateFramebuffer(context->device, &framebufferInfo, NULL, &context->framebuffers[i]);
+    }
+
+    // Create vertex buffer
+    VkDeviceSize bufferSize = sizeof(vertices);
+    if (createBuffer(context->device, context->physicalDevice, bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &context->vertexBuffer, &context->vertexBufferMemory) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create vertex buffer");
+        return false;
+    }
+    void *data;
+    vkMapMemory(context->device, context->vertexBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, vertices, bufferSize);
+    vkUnmapMemory(context->device, context->vertexBufferMemory);
+
+    // Create command pool
+    VkCommandPoolCreateInfo poolInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .queueFamilyIndex = graphicsFamily,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
+    };
+    if (vkCreateCommandPool(context->device, &poolInfo, NULL, &context->commandPool) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create command pool");
+        return false;
+    }
+
+    // Create command buffer
+    VkCommandBufferAllocateInfo allocInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = context->commandPool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1
+    };
+    if (vkAllocateCommandBuffers(context->device, &allocInfo, &context->commandBuffer) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to allocate command buffers");
+        return false;
+    }
+
+    // Create synchronization objects
+    VkSemaphoreCreateInfo semaphoreInfo = { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+    VkFenceCreateInfo fenceInfo = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = VK_FENCE_CREATE_SIGNALED_BIT };
+    if (vkCreateSemaphore(context->device, &semaphoreInfo, NULL, &context->imageAvailableSemaphore) != VK_SUCCESS ||
+        vkCreateSemaphore(context->device, &semaphoreInfo, NULL, &context->renderFinishedSemaphore) != VK_SUCCESS ||
+        vkCreateFence(context->device, &fenceInfo, NULL, &context->inFlightFence) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create synchronization objects");
+        return false;
+    }
+
+    return true;
+}
+
+bool vulkan_render(VulkanContext *context) {
+    vkWaitForFences(context->device, 1, &context->inFlightFence, VK_TRUE, UINT64_MAX);
+    vkResetFences(context->device, 1, &context->inFlightFence);
+
+    uint32_t imageIndex;
+    VkResult result = vkAcquireNextImageKHR(context->device, context->swapchain, UINT64_MAX, context->imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+    if (result != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to acquire swapchain image");
+        return false;
+    }
+
+    // Record command buffer
+    VkCommandBufferBeginInfo beginInfo = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    vkResetCommandBuffer(context->commandBuffer, 0);
+    vkBeginCommandBuffer(context->commandBuffer, &beginInfo);
+    VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+    VkRenderPassBeginInfo renderPassBeginInfo = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = context->renderPass,
+        .framebuffer = context->framebuffers[imageIndex],
+        .renderArea.extent = context->swapchainExtent,
+        .clearValueCount = 1,
+        .pClearValues = &clearColor
+    };
+    vkCmdBeginRenderPass(context->commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(context->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, context->graphicsPipeline);
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(context->commandBuffer, 0, 1, &context->vertexBuffer, offsets);
+    vkCmdDraw(context->commandBuffer, 3, 1, 0, 0);
+    vkCmdEndRenderPass(context->commandBuffer);
+    vkEndCommandBuffer(context->commandBuffer);
+
+    VkSubmitInfo submitInfo = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &context->imageAvailableSemaphore,
+        .pWaitDstStageMask = (VkPipelineStageFlags[]){VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT},
+        .commandBufferCount = 1,
+        .pCommandBuffers = &context->commandBuffer,
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &context->renderFinishedSemaphore
+    };
+    if (vkQueueSubmit(context->graphicsQueue, 1, &submitInfo, context->inFlightFence) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to submit draw command buffer");
+        return false;
+    }
+
+    VkPresentInfoKHR presentInfo = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &context->renderFinishedSemaphore,
+        .swapchainCount = 1,
+        .pSwapchains = &context->swapchain,
+        .pImageIndices = &imageIndex
+    };
+    vkQueuePresentKHR(context->presentQueue, &presentInfo);
+
+    return true;
+}
+
+void vulkan_cleanup(VulkanContext *context) {
+    vkDeviceWaitIdle(context->device);
+    vkDestroySemaphore(context->device, context->imageAvailableSemaphore, NULL);
+    vkDestroySemaphore(context->device, context->renderFinishedSemaphore, NULL);
+    vkDestroyFence(context->device, context->inFlightFence, NULL);
+    vkDestroyCommandPool(context->device, context->commandPool, NULL);
+    vkDestroyBuffer(context->device, context->vertexBuffer, NULL);
+    vkFreeMemory(context->device, context->vertexBufferMemory, NULL);
+    for (uint32_t i = 0; i < context->imageCount; i++) {
+        vkDestroyFramebuffer(context->device, context->framebuffers[i], NULL);
+        vkDestroyImageView(context->device, context->imageViews[i], NULL);
+    }
+    free(context->framebuffers);
+    free(context->imageViews);
+    vkDestroyPipeline(context->device, context->graphicsPipeline, NULL);
+    vkDestroyPipelineLayout(context->device, context->pipelineLayout, NULL);
+    vkDestroyRenderPass(context->device, context->renderPass, NULL);
+    vkDestroySwapchainKHR(context->device, context->swapchain, NULL);
+    vkDestroyDevice(context->device, NULL);
+    vkDestroySurfaceKHR(context->instance, context->surface, NULL);
+    vkDestroyInstance(context->instance, NULL);
+}
