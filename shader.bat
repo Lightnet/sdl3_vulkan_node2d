@@ -8,4 +8,7 @@ echo path "%VULKAN_Path%"
 %VULKAN_Path% -V --vn shader2d_vert_spv shaders/shader2d.vert -o include/shader2d_vert_spv.h
 %VULKAN_Path% -V --vn shader2d_frag_spv shaders/shader2d.frag -o include/shader2d_frag_spv.h
 
+%VULKAN_Path% -V --vn shader_text_vert_spv shaders/shader_text.vert -o include/shader_text_vert_spv.h
+%VULKAN_Path% -V --vn shader_text_frag_spv shaders/shader_text.frag -o include/shader_text_frag_spv.h
+
 endlocal

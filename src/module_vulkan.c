@@ -454,7 +454,7 @@ bool vulkan_init(SDL_Window *window, VulkanContext *context) {
 bool vulkan_render(VulkanContext *context) {
     static uint32_t currentFrame = 0; // Tracks the current frame index for fence/semaphore pool
 
-    SDL_Log("Starting render for frame %u", currentFrame);
+    // SDL_Log("Starting render for frame %u", currentFrame);
 
     // Wait for the fence associated with the current frame
     VkResult result = vkWaitForFences(context->device, 1, &context->inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
@@ -462,7 +462,7 @@ bool vulkan_render(VulkanContext *context) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to wait for fence %u: %d", currentFrame, result);
         return false;
     }
-    SDL_Log("Fence waited for frame %u", currentFrame);
+    // SDL_Log("Fence waited for frame %u", currentFrame);
 
     // Acquire the next swapchain image
     uint32_t imageIndex;
@@ -475,7 +475,7 @@ bool vulkan_render(VulkanContext *context) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to acquire swapchain image: %d", result);
         return false;
     }
-    SDL_Log("Acquired image index %u for frame %u with imageAvailableSemaphore[%u]", imageIndex, currentFrame, currentFrame);
+    // SDL_Log("Acquired image index %u for frame %u with imageAvailableSemaphore[%u]", imageIndex, currentFrame, currentFrame);
 
     // Wait for the fence associated with this image, if any
     if (context->fencesInUse[imageIndex] != VK_NULL_HANDLE) {
@@ -484,7 +484,7 @@ bool vulkan_render(VulkanContext *context) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to wait for fence for image %u: %d", imageIndex, result);
             return false;
         }
-        SDL_Log("Fence waited for image %u", imageIndex);
+        // SDL_Log("Fence waited for image %u", imageIndex);
     }
 
     // Associate the current frame's fence with this image
@@ -495,14 +495,14 @@ bool vulkan_render(VulkanContext *context) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to reset fence for frame %u", currentFrame);
         return false;
     }
-    SDL_Log("Fence reset for frame %u", currentFrame);
+    // SDL_Log("Fence reset for frame %u", currentFrame);
 
     // Reset the command buffer for the acquired image
     if (vkResetCommandBuffer(context->commandBuffers[imageIndex], 0) != VK_SUCCESS) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to reset command buffer for image %u", imageIndex);
         return false;
     }
-    SDL_Log("Command buffer reset for image %u", imageIndex);
+    // SDL_Log("Command buffer reset for image %u", imageIndex);
 
     // Record the command buffer
     VkCommandBufferBeginInfo beginInfo = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -523,13 +523,13 @@ bool vulkan_render(VulkanContext *context) {
     };
 
     vkCmdBeginRenderPass(context->commandBuffers[imageIndex], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-    SDL_Log("Render pass started for image %u", imageIndex);
+    // SDL_Log("Render pass started for image %u", imageIndex);
     vkCmdBindPipeline(context->commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, context->graphicsPipeline);
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(context->commandBuffers[imageIndex], 0, 1, &context->vertexBuffer, offsets);
     vkCmdDraw(context->commandBuffers[imageIndex], 9, 1, 0, 0); // Triangle and square
     if (context->textContext) {
-        SDL_Log("Calling text_render for image %u", imageIndex);
+        // SDL_Log("Calling text_render for image %u", imageIndex);
         text_render(context, context->textContext, context->commandBuffers[imageIndex]);
     }
     vkCmdEndRenderPass(context->commandBuffers[imageIndex]);
@@ -537,7 +537,7 @@ bool vulkan_render(VulkanContext *context) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to end command buffer for image %u", imageIndex);
         return false;
     }
-    SDL_Log("Command buffer recorded for image %u", imageIndex);
+    //SDL_Log("Command buffer recorded for image %u", imageIndex);
 
     // Submit the command buffer
     VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -555,8 +555,8 @@ bool vulkan_render(VulkanContext *context) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to submit draw command buffer for frame %u", currentFrame);
         return false;
     }
-    SDL_Log("Command buffer submitted for frame %u, image %u with renderFinishedSemaphore[%u]", 
-            currentFrame, imageIndex, imageIndex);
+    // SDL_Log("Command buffer submitted for frame %u, image %u with renderFinishedSemaphore[%u]", 
+    //         currentFrame, imageIndex, imageIndex);
 
     // Present the image
     VkPresentInfoKHR presentInfo = {
@@ -575,7 +575,7 @@ bool vulkan_render(VulkanContext *context) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to present queue: %d", result);
         return false;
     }
-    SDL_Log("Presented image %u for frame %u", imageIndex, currentFrame);
+    //SDL_Log("Presented image %u for frame %u", imageIndex, currentFrame);
 
     // Advance to the next frame
     currentFrame = (currentFrame + 1) % context->imageCount;

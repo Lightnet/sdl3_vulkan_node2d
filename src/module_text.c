@@ -9,10 +9,10 @@
 
 
 static const TextVertex vertices[] = {
-    {-0.5f, -0.1f, 0.0f, 1.0f}, // Bottom-left
-    { 0.5f, -0.1f, 1.0f, 1.0f}, // Bottom-right
-    {-0.5f,  0.1f, 0.0f, 0.0f}, // Top-left
-    { 0.5f,  0.1f, 1.0f, 0.0f}  // Top-right
+    {-0.5f, -0.1f, 0.0f, 0.0f}, // Bottom-left: v=0 (texture bottom)
+    { 0.5f, -0.1f, 1.0f, 0.0f}, // Bottom-right: v=0
+    {-0.5f,  0.1f, 0.0f, 1.0f}, // Top-left: v=1 (texture top)
+    { 0.5f,  0.1f, 1.0f, 1.0f}  // Top-right: v=1
 };
 
 static const uint32_t indices[] = {0, 1, 2, 2, 1, 3};
@@ -458,14 +458,14 @@ void text_render(VulkanContext *vulkanContext, TextContext *textContext, VkComma
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Text pipeline is invalid, skipping text render");
         return;
     }
-    SDL_Log("Rendering text quad");
+    //SDL_Log("Rendering text quad");
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textContext->graphicsPipeline);
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &textContext->vertexBuffer, offsets);
     vkCmdBindIndexBuffer(commandBuffer, textContext->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textContext->pipelineLayout, 0, 1, &textContext->descriptorSet, 0, NULL);
     vkCmdDrawIndexed(commandBuffer, 6, 1, 0, 0, 0);
-    SDL_Log("Text quad draw command issued");
+    //SDL_Log("Text quad draw command issued");
 }
 
 void text_cleanup(VulkanContext *vulkanContext, TextContext *textContext) {

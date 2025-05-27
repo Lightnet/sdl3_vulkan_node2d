@@ -1,5 +1,6 @@
 @echo off 
 setlocal
 cd build
-sdl_terminal.exe > runtime_log.txt 2>&1
+@REM sdl_terminal.exe > runtime_log.txt 2>&1
+sdl_terminal.exe
 endlocal
