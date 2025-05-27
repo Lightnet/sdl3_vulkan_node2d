@@ -1,50 +1,50 @@
 #include <SDL3/SDL.h>
-#include <stdio.h>
-#include <stdbool.h>
 #include "module_vulkan.h"
 
 int main(int argc, char *argv[]) {
-    printf("Hello Vulkan\n");
+    SDL_Init(SDL_INIT_VIDEO);
 
-    // Initialize SDL
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't initialize SDL: %s", SDL_GetError());
-        return 1;
-    }
-
-    // Create window
-    SDL_Window *window = SDL_CreateWindow("SDL 3.x Vulkan Node 2D", 800, 600, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    SDL_Window *window = SDL_CreateWindow("SDL Vulkan Node 2D", 600, 480, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
     if (!window) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Window creation failed: %s", SDL_GetError());
-        SDL_Quit();
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create window: %s", SDL_GetError());
         return 1;
     }
 
-    // Initialize Vulkan
-    VulkanContext vulkanContext = {0};
-    if (!vulkan_init(window, &vulkanContext)) {
+    VulkanContext context = {0};
+    if (!vulkan_init(window, &context)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize Vulkan");
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
 
-    // Main loop
     bool running = true;
+    SDL_Event event;
     while (running) {
-        SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) {
-                running = false;
+            switch (event.type) {
+                case SDL_EVENT_QUIT:
+                    running = false;
+                    break;
+                case SDL_EVENT_WINDOW_RESIZED:
+                    SDL_Log("Window resized to %dx%d", event.window.data1, event.window.data2);
+                    if (!recreate_swapchain(&context, window)) {
+                        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Failed to recreate swapchain, retrying");
+                    }
+                    break;
             }
         }
 
-        if (!vulkan_render(&vulkanContext)) {
-            running = false;
+        if (!vulkan_render(&context)) {
+            // Handle swapchain out of date
+            if (!recreate_swapchain(&context, window)) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Failed to recreate swapchain, retrying");
+            }
+            continue;
         }
     }
 
-    // Cleanup
-    vulkan_cleanup(&vulkanContext);
+    vulkan_cleanup(&context);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;

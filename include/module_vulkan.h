@@ -6,12 +6,14 @@
 #include <vulkan/vulkan.h>
 #include <stdbool.h>
 
+// Forward declaration
+struct TextContext;
+
 typedef struct {
-    float x, y; // Position
-    float r, g, b; // Color
+ float x, y; // Position
+ float r, g, b; // Color
 } Vertex;
 
-// Vulkan context structure to hold all Vulkan objects
 typedef struct {
     VkInstance instance;
     VkSurfaceKHR surface;
@@ -19,30 +21,30 @@ typedef struct {
     VkDevice device;
     VkQueue graphicsQueue;
     VkQueue presentQueue;
+    uint32_t graphicsFamily; // Add queue family indices
+    uint32_t presentFamily;
     VkSwapchainKHR swapchain;
     VkRenderPass renderPass;
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
     VkCommandPool commandPool;
-    VkCommandBuffer commandBuffer;
-    VkSemaphore imageAvailableSemaphore;
-    VkSemaphore renderFinishedSemaphore;
-    VkFence inFlightFence;
+    VkCommandBuffer *commandBuffers;
+    VkSemaphore *imageAvailableSemaphores;
+    VkSemaphore *renderFinishedSemaphores;
+    VkFence *inFlightFences;
+    VkFence *fencesInUse;
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
     VkFramebuffer *framebuffers;
     VkImageView *imageViews;
     uint32_t imageCount;
     VkExtent2D swapchainExtent;
+    struct TextContext *textContext;
 } VulkanContext;
 
-// Initialize Vulkan context
 bool vulkan_init(SDL_Window *window, VulkanContext *context);
-
-// Render a frame
 bool vulkan_render(VulkanContext *context);
-
-// Cleanup Vulkan resources
 void vulkan_cleanup(VulkanContext *context);
+bool recreate_swapchain(VulkanContext *context, SDL_Window *window);
 
 #endif // MODULE_VULKAN_H
