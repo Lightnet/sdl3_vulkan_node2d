@@ -17,26 +17,35 @@ static const TextVertex vertices[] = {
 
 static const uint32_t indices[] = {0, 1, 2, 2, 1, 3};
 
-static VkResult createTextureImage(VulkanContext *vulkanContext, SDL_Surface *surface, VkImage *image, VkDeviceMemory *imageMemory) {
+
+static bool createTextureImage(VulkanContext *vulkanContext, SDL_Surface *surface, VkImage *image, VkDeviceMemory *imageMemory) {
     SDL_Surface *convertedSurface = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA8888);
     if (!convertedSurface) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to convert surface to RGBA8888: %s", SDL_GetError());
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return false;
     }
+    SDL_Log("Converted surface: %dx%d, format=%s", convertedSurface->w, convertedSurface->h, SDL_GetPixelFormatName(convertedSurface->format));
 
     VkDeviceSize imageSize = convertedSurface->w * convertedSurface->h * 4;
     SDL_Log("Creating texture image: %dx%d, size=%zu bytes", convertedSurface->w, convertedSurface->h, imageSize);
 
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    if (createBuffer(vulkanContext->device, vulkanContext->physicalDevice, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &stagingBuffer, &stagingBufferMemory) != VK_SUCCESS) {
+    VkBuffer stagingBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
+    if (!createBuffer(vulkanContext->device, vulkanContext->physicalDevice, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &stagingBuffer, &stagingBufferMemory)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create staging buffer");
         SDL_DestroySurface(convertedSurface);
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return false;
     }
 
     void *data;
-    vkMapMemory(vulkanContext->device, stagingBufferMemory, 0, imageSize, 0, &data);
+    if (vkMapMemory(vulkanContext->device, stagingBufferMemory, 0, imageSize, 0, &data) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to map staging buffer memory");
+        vkDestroyBuffer(vulkanContext->device, stagingBuffer, NULL);
+        vkFreeMemory(vulkanContext->device, stagingBufferMemory, NULL);
+        SDL_DestroySurface(convertedSurface);
+        return false;
+    }
     memcpy(data, convertedSurface->pixels, imageSize);
     vkUnmapMemory(vulkanContext->device, stagingBufferMemory);
 
@@ -53,28 +62,56 @@ static VkResult createTextureImage(VulkanContext *vulkanContext, SDL_Surface *su
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
     };
+    *image = VK_NULL_HANDLE;
     if (vkCreateImage(vulkanContext->device, &imageInfo, NULL, image) != VK_SUCCESS) {
-        SDL_DestroySurface(convertedSurface);
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create image");
         vkDestroyBuffer(vulkanContext->device, stagingBuffer, NULL);
         vkFreeMemory(vulkanContext->device, stagingBufferMemory, NULL);
-        return VK_ERROR_INITIALIZATION_FAILED;
+        SDL_DestroySurface(convertedSurface);
+        return false;
     }
 
     VkMemoryRequirements memRequirements;
     vkGetImageMemoryRequirements(vulkanContext->device, *image, &memRequirements);
-    VkMemoryAllocateInfo allocInfo = {
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .allocationSize = memRequirements.size,
-        .memoryTypeIndex = findMemoryType(vulkanContext->physicalDevice, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
-    };
-    if (vkAllocateMemory(vulkanContext->device, &allocInfo, NULL, imageMemory) != VK_SUCCESS) {
-        SDL_DestroySurface(convertedSurface);
+    SDL_Log("Image memory requirements: size=%zu, alignment=%u, memoryTypeBits=0x%x", memRequirements.size, memRequirements.alignment, memRequirements.memoryTypeBits);
+
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(vulkanContext->physicalDevice, &memProperties);
+    uint32_t memoryTypeIndex = findMemoryType(vulkanContext->physicalDevice, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memoryTypeIndex == UINT32_MAX) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to find suitable memory type for image");
         vkDestroyImage(vulkanContext->device, *image, NULL);
         vkDestroyBuffer(vulkanContext->device, stagingBuffer, NULL);
         vkFreeMemory(vulkanContext->device, stagingBufferMemory, NULL);
-        return VK_ERROR_INITIALIZATION_FAILED;
+        SDL_DestroySurface(convertedSurface);
+        return false;
     }
-    vkBindImageMemory(vulkanContext->device, *image, *imageMemory, 0);
+
+    VkMemoryAllocateInfo allocInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memRequirements.size,
+        .memoryTypeIndex = memoryTypeIndex
+    };
+    *imageMemory = VK_NULL_HANDLE;
+    SDL_Log("Allocating image memory: size=%zu, memoryTypeIndex=%u", memRequirements.size, memoryTypeIndex);
+    if (vkAllocateMemory(vulkanContext->device, &allocInfo, NULL, imageMemory) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to allocate image memory");
+        vkDestroyImage(vulkanContext->device, *image, NULL);
+        vkDestroyBuffer(vulkanContext->device, stagingBuffer, NULL);
+        vkFreeMemory(vulkanContext->device, stagingBufferMemory, NULL);
+        SDL_DestroySurface(convertedSurface);
+        return false;
+    }
+
+    if (vkBindImageMemory(vulkanContext->device, *image, *imageMemory, 0) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to bind image memory");
+        vkFreeMemory(vulkanContext->device, *imageMemory, NULL);
+        vkDestroyImage(vulkanContext->device, *image, NULL);
+        vkDestroyBuffer(vulkanContext->device, stagingBuffer, NULL);
+        vkFreeMemory(vulkanContext->device, stagingBufferMemory, NULL);
+        SDL_DestroySurface(convertedSurface);
+        return false;
+    }
 
     VkCommandBuffer commandBuffer = beginSingleTimeCommands(vulkanContext->device, vulkanContext->commandPool);
     transitionImageLayout(commandBuffer, *image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -85,8 +122,11 @@ static VkResult createTextureImage(VulkanContext *vulkanContext, SDL_Surface *su
     vkDestroyBuffer(vulkanContext->device, stagingBuffer, NULL);
     vkFreeMemory(vulkanContext->device, stagingBufferMemory, NULL);
     SDL_DestroySurface(convertedSurface);
-    return VK_SUCCESS;
+    return true;
 }
+
+
+
 
 bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
     SDL_Log("Initializing text module");
@@ -113,11 +153,24 @@ bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
         TTF_Quit();
         return false;
     }
+
+    // Initialize text position
+    glm_vec2_zero(textContext->position);
+    glm_mat4_identity(textContext->modelMatrix);
+
     SDL_Log("Text surface created: %dx%d, format=%s", surface->w, surface->h, SDL_GetPixelFormatName(surface->format));
     SDL_SaveBMP(surface, "text_surface.bmp"); // Debug: Save surface to inspect
 
-    if (createTextureImage(vulkanContext, surface, &textContext->textureImage, &textContext->textureImageMemory) != VK_SUCCESS) {
+    if (!createTextureImage(vulkanContext, surface, &textContext->textureImage, &textContext->textureImageMemory)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create texture image");
+        if (textContext->textureImage != VK_NULL_HANDLE) {
+            vkDestroyImage(vulkanContext->device, textContext->textureImage, NULL);
+            textContext->textureImage = VK_NULL_HANDLE;
+        }
+        if (textContext->textureImageMemory != VK_NULL_HANDLE) {
+            vkFreeMemory(vulkanContext->device, textContext->textureImageMemory, NULL);
+            textContext->textureImageMemory = VK_NULL_HANDLE;
+        }
         SDL_DestroySurface(surface);
         TTF_CloseFont(font);
         TTF_Quit();
@@ -170,11 +223,21 @@ bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
     }
 
     VkDeviceSize bufferSize = sizeof(vertices);
-    if (createBuffer(vulkanContext->device, vulkanContext->physicalDevice, bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &textContext->vertexBuffer, &textContext->vertexBufferMemory) != VK_SUCCESS) {
+    textContext->vertexBuffer = VK_NULL_HANDLE;
+    textContext->vertexBufferMemory = VK_NULL_HANDLE;
+    if (!createBuffer(vulkanContext->device, vulkanContext->physicalDevice, bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &textContext->vertexBuffer, &textContext->vertexBufferMemory)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create vertex buffer");
+        if (textContext->vertexBuffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(vulkanContext->device, textContext->vertexBuffer, NULL);
+        }
+        if (textContext->vertexBufferMemory != VK_NULL_HANDLE) {
+            vkFreeMemory(vulkanContext->device, textContext->vertexBufferMemory, NULL);
+        }
         vkDestroySampler(vulkanContext->device, textContext->textureSampler, NULL);
         vkDestroyImageView(vulkanContext->device, textContext->textureImageView, NULL);
+        vkDestroyImage(vulkanContext->device, textContext->textureImage, NULL);
+        vkFreeMemory(vulkanContext->device, textContext->textureImageMemory, NULL);
         SDL_DestroySurface(surface);
         TTF_CloseFont(font);
         TTF_Quit();
@@ -186,13 +249,23 @@ bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
     vkUnmapMemory(vulkanContext->device, textContext->vertexBufferMemory);
 
     bufferSize = sizeof(indices);
-    if (createBuffer(vulkanContext->device, vulkanContext->physicalDevice, bufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &textContext->indexBuffer, &textContext->indexBufferMemory) != VK_SUCCESS) {
+    textContext->indexBuffer = VK_NULL_HANDLE;
+    textContext->indexBufferMemory = VK_NULL_HANDLE;
+    if (!createBuffer(vulkanContext->device, vulkanContext->physicalDevice, bufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &textContext->indexBuffer, &textContext->indexBufferMemory)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create index buffer");
+        if (textContext->indexBuffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(vulkanContext->device, textContext->indexBuffer, NULL);
+        }
+        if (textContext->indexBufferMemory != VK_NULL_HANDLE) {
+            vkFreeMemory(vulkanContext->device, textContext->indexBufferMemory, NULL);
+        }
         vkDestroyBuffer(vulkanContext->device, textContext->vertexBuffer, NULL);
         vkFreeMemory(vulkanContext->device, textContext->vertexBufferMemory, NULL);
         vkDestroySampler(vulkanContext->device, textContext->textureSampler, NULL);
         vkDestroyImageView(vulkanContext->device, textContext->textureImageView, NULL);
+        vkDestroyImage(vulkanContext->device, textContext->textureImage, NULL);
+        vkFreeMemory(vulkanContext->device, textContext->textureImageMemory, NULL);
         SDL_DestroySurface(surface);
         TTF_CloseFont(font);
         TTF_Quit();
@@ -202,17 +275,26 @@ bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
     memcpy(data, indices, bufferSize);
     vkUnmapMemory(vulkanContext->device, textContext->indexBufferMemory);
 
-    VkDescriptorSetLayoutBinding samplerLayoutBinding = {
+    VkDescriptorSetLayoutBinding bindings[2] = {
+    {
         .binding = 0,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptorCount = 1,
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
         .pImmutableSamplers = NULL
+    },
+    {
+        .binding = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .pImmutableSamplers = NULL
+        }
     };
     VkDescriptorSetLayoutCreateInfo layoutInfo = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 1,
-        .pBindings = &samplerLayoutBinding
+        .bindingCount = 2,
+        .pBindings = bindings
     };
     if (vkCreateDescriptorSetLayout(vulkanContext->device, &layoutInfo, NULL, &textContext->descriptorSetLayout) != VK_SUCCESS) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create descriptor set layout");
@@ -228,15 +310,15 @@ bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
         return false;
     }
 
-    VkDescriptorPoolSize poolSize = {
-        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = 1
+    VkDescriptorPoolSize poolSizes[2] = {
+        { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1 },
+        { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1 }
     };
     VkDescriptorPoolCreateInfo poolInfo = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .maxSets = 1,
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize
+        .poolSizeCount = 2,
+        .pPoolSizes = poolSizes
     };
     if (vkCreateDescriptorPool(vulkanContext->device, &poolInfo, NULL, &textContext->descriptorPool) != VK_SUCCESS) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create descriptor pool");
@@ -275,12 +357,21 @@ bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
         return false;
     }
 
+    // Update descriptor set
+    VkDescriptorBufferInfo bufferInfo = {
+        .buffer = vulkanContext->uniformBuffer,
+        .offset = 0,
+        .range = sizeof(mat4)
+    };
+
     VkDescriptorImageInfo imageInfo = {
         .sampler = textContext->textureSampler,
         .imageView = textContext->textureImageView,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
-    VkWriteDescriptorSet descriptorWrite = {
+
+    VkWriteDescriptorSet descriptorWrites[2] = {
+    {
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .dstSet = textContext->descriptorSet,
         .dstBinding = 0,
@@ -288,8 +379,18 @@ bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
         .descriptorCount = 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .pImageInfo = &imageInfo
+    },
+    {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = textContext->descriptorSet,
+        .dstBinding = 1,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .pBufferInfo = &bufferInfo
+    }
     };
-    vkUpdateDescriptorSets(vulkanContext->device, 1, &descriptorWrite, 0, NULL);
+    vkUpdateDescriptorSets(vulkanContext->device, 2, descriptorWrites, 0, NULL);
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -453,20 +554,43 @@ bool text_init(VulkanContext *vulkanContext, TextContext *textContext) {
     return true;
 }
 
+
 void text_render(VulkanContext *vulkanContext, TextContext *textContext, VkCommandBuffer commandBuffer) {
     if (!textContext->graphicsPipeline) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Text pipeline is invalid, skipping text render");
         return;
     }
-    //SDL_Log("Rendering text quad");
+
+    mat4 projection, view, vp, mvp;
+    glm_ortho(0.0f, (float)vulkanContext->swapchainExtent.width,
+              (float)vulkanContext->swapchainExtent.height, 0.0f,
+              -1.0f, 1.0f, projection);
+    glm_mat4_identity(view); // Reset view to identity for screen-space text
+    glm_mat4_mul(projection, view, vp);
+
+    // Scale and translate the text quad
+    mat4 model;
+    glm_mat4_identity(model);
+    glm_scale(model, (vec3){100.0f, 100.0f, 1.0f}); // Scale quad to ~100x20 pixels
+    glm_translate(model, (vec3){1.0f, 1.0f, 0.0f}); // Move to (100,100) pixels
+    glm_mat4_mul(vp, model, mvp);
+
+    void *data;
+    vkMapMemory(vulkanContext->device, vulkanContext->uniformBufferMemory, 0, sizeof(mat4), 0, &data);
+    memcpy(data, mvp, sizeof(mat4));
+    vkUnmapMemory(vulkanContext->device, vulkanContext->uniformBufferMemory);
+
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textContext->graphicsPipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textContext->pipelineLayout,
+                            0, 1, &textContext->descriptorSet, 0, NULL);
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &textContext->vertexBuffer, offsets);
     vkCmdBindIndexBuffer(commandBuffer, textContext->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textContext->pipelineLayout, 0, 1, &textContext->descriptorSet, 0, NULL);
     vkCmdDrawIndexed(commandBuffer, 6, 1, 0, 0, 0);
-    //SDL_Log("Text quad draw command issued");
 }
+
+
+
 
 void text_cleanup(VulkanContext *vulkanContext, TextContext *textContext) {
     SDL_Log("Cleaning up text module");

@@ -14,29 +14,72 @@ uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, Vk
  return UINT32_MAX;
 }
 
-VkResult createBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer *buffer, VkDeviceMemory *bufferMemory) {
- VkBufferCreateInfo bufferInfo = {
- .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
- .size = size,
- .usage = usage,
- .sharingMode = VK_SHARING_MODE_EXCLUSIVE
- };
- if (vkCreateBuffer(device, &bufferInfo, NULL, buffer) != VK_SUCCESS) {
- return VK_ERROR_INITIALIZATION_FAILED;
- }
- VkMemoryRequirements memRequirements;
- vkGetBufferMemoryRequirements(device, *buffer, &memRequirements);
- VkMemoryAllocateInfo allocInfo = {
- .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
- .allocationSize = memRequirements.size,
- .memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties)
- };
- if (vkAllocateMemory(device, &allocInfo, NULL, bufferMemory) != VK_SUCCESS) {
- return VK_ERROR_INITIALIZATION_FAILED;
- }
- vkBindBufferMemory(device, *buffer, *bufferMemory, 0);
- return VK_SUCCESS;
+
+bool createBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage,
+                 VkMemoryPropertyFlags properties, VkBuffer *buffer, VkDeviceMemory *bufferMemory) {
+    *buffer = VK_NULL_HANDLE;
+    *bufferMemory = VK_NULL_HANDLE;
+
+    // Create buffer
+    VkBufferCreateInfo bufferInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE
+    };
+    if (vkCreateBuffer(device, &bufferInfo, NULL, buffer) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create buffer");
+        return false;
+    }
+
+    // Get memory requirements
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(device, *buffer, &memRequirements);
+
+    // Find suitable memory type
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+    uint32_t memoryTypeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((memRequirements.memoryTypeBits & (1 << i)) &&
+            (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            memoryTypeIndex = i;
+            break;
+        }
+    }
+    if (memoryTypeIndex == UINT32_MAX) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to find suitable memory type");
+        vkDestroyBuffer(device, *buffer, NULL);
+        *buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    // Allocate memory
+    VkMemoryAllocateInfo allocInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memRequirements.size,
+        .memoryTypeIndex = memoryTypeIndex
+    };
+    if (vkAllocateMemory(device, &allocInfo, NULL, bufferMemory) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to allocate buffer memory");
+        vkDestroyBuffer(device, *buffer, NULL);
+        *buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    // Bind memory to buffer
+    if (vkBindBufferMemory(device, *buffer, *bufferMemory, 0) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to bind buffer memory");
+        vkFreeMemory(device, *bufferMemory, NULL);
+        vkDestroyBuffer(device, *buffer, NULL);
+        *buffer = VK_NULL_HANDLE;
+        *bufferMemory = VK_NULL_HANDLE;
+        return false;
+    }
+
+    return true;
 }
+
 
 VkCommandBuffer beginSingleTimeCommands(VkDevice device, VkCommandPool commandPool) {
  VkCommandBufferAllocateInfo allocInfo = {

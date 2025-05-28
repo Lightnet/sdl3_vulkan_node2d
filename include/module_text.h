@@ -13,19 +13,21 @@ typedef struct {
 } TextVertex;
 
 typedef struct TextContext {
- VkBuffer vertexBuffer;
- VkDeviceMemory vertexBufferMemory;
- VkBuffer indexBuffer;
- VkDeviceMemory indexBufferMemory;
- VkImage textureImage;
- VkDeviceMemory textureImageMemory;
- VkImageView textureImageView;
- VkSampler textureSampler;
- VkDescriptorSetLayout descriptorSetLayout;
- VkDescriptorPool descriptorPool;
- VkDescriptorSet descriptorSet;
- VkPipelineLayout pipelineLayout;
- VkPipeline graphicsPipeline;
+    VkBuffer vertexBuffer;
+    VkDeviceMemory vertexBufferMemory;
+    VkBuffer indexBuffer;
+    VkDeviceMemory indexBufferMemory;
+    VkImage textureImage;
+    VkDeviceMemory textureImageMemory;
+    VkImageView textureImageView;
+    VkSampler textureSampler;
+    VkDescriptorSetLayout descriptorSetLayout;
+    VkDescriptorPool descriptorPool;
+    VkDescriptorSet descriptorSet;
+    VkPipelineLayout pipelineLayout;
+    VkPipeline graphicsPipeline;
+    vec2 position; // Text position
+    mat4 modelMatrix; // Text transformation
 } TextContext;
 
 bool text_init(VulkanContext *vulkanContext, TextContext *textContext);

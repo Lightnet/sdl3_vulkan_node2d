@@ -52,8 +52,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(sdl_ttf)
 
+FetchContent_Declare(
+    cglm
+    GIT_REPOSITORY https://github.com/recp/cglm.git
+    GIT_TAG v0.9.4
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(cglm)
+
+
+
 # Shader compilation
-# do list need to compile first header which before application.
 set(VULKAN_SDK "C:/VulkanSDK/1.4.313.0" CACHE PATH "Path to Vulkan SDK")
 find_program(GLSLANG_VALIDATOR_EXECUTABLE NAMES glslangValidator HINTS ENV VULKAN_SDK PATH_SUFFIXES Bin)
 if (NOT GLSLANG_VALIDATOR_EXECUTABLE)
@@ -99,6 +108,7 @@ target_include_directories(${APP_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${SDL3_SOURCE_DIR}/include
     ${Vulkan_INCLUDE_DIRS}
+    ${cglm_SOURCE_DIR}/include
 )
 
 # Link libraries

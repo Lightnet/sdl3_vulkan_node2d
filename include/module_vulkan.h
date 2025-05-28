@@ -5,14 +5,24 @@
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
 #include <stdbool.h>
+#include <cglm/cglm.h>
 
-// Forward declaration
 struct TextContext;
 
 typedef struct {
- float x, y; // Position
- float r, g, b; // Color
+    float x, y; // Position
+    float r, g, b; // Color
 } Vertex;
+
+typedef struct {
+    vec2 position; // Object position
+    mat4 modelMatrix; // Per-object transformation
+} Object;
+
+typedef struct {
+    vec2 position; // Camera position (x, y)
+    float scale;   // Zoom level
+} Camera;
 
 typedef struct {
     VkInstance instance;
@@ -21,7 +31,7 @@ typedef struct {
     VkDevice device;
     VkQueue graphicsQueue;
     VkQueue presentQueue;
-    uint32_t graphicsFamily; // Add queue family indices
+    uint32_t graphicsFamily;
     uint32_t presentFamily;
     VkSwapchainKHR swapchain;
     VkRenderPass renderPass;
@@ -35,11 +45,24 @@ typedef struct {
     VkFence *fencesInUse;
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
+    VkBuffer triangleVertexBuffer;
+    VkDeviceMemory triangleVertexBufferMemory;
+    VkBuffer squareVertexBuffer;
+    VkDeviceMemory squareVertexBufferMemory;
+    VkBuffer squareIndexBuffer;
+    VkDeviceMemory squareIndexBufferMemory;
     VkFramebuffer *framebuffers;
     VkImageView *imageViews;
     uint32_t imageCount;
     VkExtent2D swapchainExtent;
     struct TextContext *textContext;
+    Camera camera;
+    Object objects[2]; // 0: triangle, 1: square
+    VkBuffer uniformBuffer;
+    VkDeviceMemory uniformBufferMemory;
+    VkDescriptorSetLayout descriptorSetLayout;
+    VkDescriptorPool descriptorPool;
+    VkDescriptorSet *descriptorSets;
 } VulkanContext;
 
 bool vulkan_init(SDL_Window *window, VulkanContext *context);
